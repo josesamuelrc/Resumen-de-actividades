@@ -1,0 +1,6 @@
+{
+  "name": "Registro de Productividad",
+  "description": "Aplicación móvil minimalista para registrar actividades laborales diarias, medir tiempos, analizar eficiencia semanal con gráficos y exportar reportes para WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
