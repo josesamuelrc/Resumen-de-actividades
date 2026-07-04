@@ -30,7 +30,8 @@ import {
   Database,
   Cloud,
   CloudOff,
-  Edit2
+  Edit2,
+  Download
 } from 'lucide-react';
 import { WorkDay, Task, TaskCategory, CATEGORY_COLORS } from './types';
 import { 
@@ -38,7 +39,8 @@ import {
   formatMinutes, 
   generateWhatsAppReport, 
   getSampleData, 
-  formatChartDate 
+  formatChartDate,
+  generateCSV
 } from './utils';
 import { 
   isSupabaseConfigured, 
@@ -393,6 +395,30 @@ export default function App() {
     window.open(url, '_blank');
   };
 
+  // Export all database activities to clean, analysis-ready CSV (with Excel UTF-8 support)
+  const handleExportCSV = () => {
+    try {
+      const csvContent = generateCSV(workDays);
+      const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      
+      const fileDate = new Date().toISOString().split('T')[0];
+      const fileName = `bitacora_calidad_control_${fileDate}.csv`;
+      link.setAttribute('download', fileName);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      triggerToast('📥 ¡Datos exportados a CSV listos para análisis!');
+    } catch (error) {
+      console.error(error);
+      triggerToast('❌ Error al exportar los datos.');
+    }
+  };
+
   // Change selected day by offset
   const shiftDate = (daysOffset: number) => {
     const d = new Date(selectedDate + 'T00:00:00');
@@ -608,6 +634,15 @@ export default function App() {
               <FileText className="w-4 h-4 text-slate-400" />
               <span>Reportes de Copiado</span>
             </a>
+            
+            <button 
+              onClick={handleExportCSV} 
+              className="w-full flex items-center space-x-2.5 p-2.5 text-blue-700 bg-blue-50/40 hover:bg-blue-50 border border-blue-100 rounded-xl text-xs font-bold transition-all mt-3 cursor-pointer group"
+              title="Descargar toda la data limpia en formato CSV compatible con Excel"
+            >
+              <Download className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
+              <span>Exportar Excel (CSV)</span>
+            </button>
           </nav>
         </div>
 
@@ -695,6 +730,17 @@ export default function App() {
                 <span>Modo Local (Dispositivo)</span>
               </div>
             )}
+
+            {/* Sticky Header Quick Export Button */}
+            <button
+              onClick={handleExportCSV}
+              className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] md:text-xs font-extrabold rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer"
+              title="Exportar toda la data recolectada a un archivo Excel/CSV limpio"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">Excel/CSV</span>
+              <span className="xs:hidden">Exportar</span>
+            </button>
           </div>
         </header>
 

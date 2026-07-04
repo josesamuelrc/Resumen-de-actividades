@@ -211,3 +211,59 @@ export function formatChartDate(dateStr: string): string {
   
   return `${days[d.getDay()]} ${d.getDate()}`;
 }
+
+// Generate flat, clean CSV string of all logged tasks for data analysis
+export function generateCSV(workDays: WorkDay[]): string {
+  const headers = [
+    'Fecha', 
+    'Colaborador', 
+    'Actividad', 
+    'Categoría', 
+    'Categoría Personalizada', 
+    'Hora Inicio', 
+    'Hora Fin', 
+    'Duración (Minutos)', 
+    'Duración (Horas)', 
+    'Notas'
+  ];
+  
+  const rows: string[][] = [headers];
+  
+  // Sort workDays chronologically by date
+  const sortedDays = [...workDays].sort((a, b) => a.date.localeCompare(b.date));
+  
+  sortedDays.forEach(day => {
+    // Sort tasks of each day by startTime
+    const sortedTasks = [...day.tasks].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    sortedTasks.forEach(task => {
+      const durationMin = calculateDurationMinutes(task.startTime, task.endTime);
+      const durationHr = parseFloat((durationMin / 60).toFixed(2));
+      const customCat = task.category === 'Otro' ? (task.customCategory || '') : '';
+      const notes = (task.notes || '').trim();
+      
+      rows.push([
+        day.date,
+        day.personName,
+        task.title.trim(),
+        task.category,
+        customCat,
+        task.startTime,
+        task.endTime,
+        durationMin.toString(),
+        durationHr.toString(),
+        notes
+      ]);
+    });
+  });
+  
+  // Convert rows to standard CSV with safe character escaping (UTF-8 compatible)
+  return rows.map(row => 
+    row.map(val => {
+      const cleaned = val.replace(/"/g, '""'); // escape double quotes
+      if (cleaned.includes(',') || cleaned.includes('\n') || cleaned.includes('"') || cleaned.includes(';')) {
+        return `"${cleaned}"`;
+      }
+      return cleaned;
+    }).join(',')
+  ).join('\n');
+}
