@@ -26,7 +26,11 @@ import {
   FileText,
   TrendingUp,
   UserCheck,
-  RotateCcw
+  RotateCcw,
+  Database,
+  Cloud,
+  CloudOff,
+  Edit2
 } from 'lucide-react';
 import { WorkDay, Task, TaskCategory, CATEGORY_COLORS } from './types';
 import { 
@@ -36,6 +40,11 @@ import {
   getSampleData, 
   formatChartDate 
 } from './utils';
+import { 
+  isSupabaseConfigured, 
+  syncLocalWithSupabase, 
+  upsertWorkDay 
+} from './lib/supabase';
 
 const COLLABORATORS = [
   'Jose Samuel', 'Dayana', 'Fray', 'Jose Segovia', 'Bruno', 'Diego', 
@@ -83,6 +92,20 @@ export default function App() {
   const [activeChartTab, setActiveChartTab] = useState<'hours' | 'categories'>('hours');
   const [hoveredChartBar, setHoveredChartBar] = useState<string | null>(null);
 
+  // Connection and Sync state
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error' | 'not-configured'>('idle');
+
+  // Task editing state
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+
+  // Reset editing mode if collaborator or selected date changes to prevent accidental saves to wrong days
+  useEffect(() => {
+    setEditingTaskId(null);
+    setTaskTitle('');
+    setTaskNotes('');
+    setCustomCategoryName('');
+  }, [selectedDate, personName]);
+
   // Synchronize person name to localStorage
   useEffect(() => {
     localStorage.setItem('productivity_person_name', personName);
@@ -93,6 +116,65 @@ export default function App() {
     localStorage.setItem('productivity_workdays', JSON.stringify(workDays));
   }, [workDays]);
 
+  // Initial Sync on Mount
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setSyncStatus('not-configured');
+      return;
+    }
+
+    const performSync = async () => {
+      try {
+        setSyncStatus('syncing');
+        // Get initial local state directly
+        const saved = localStorage.getItem('productivity_workdays');
+        let localDays: WorkDay[] = [];
+        if (saved) {
+          try {
+            localDays = JSON.parse(saved);
+          } catch (e) {
+            console.error('Failed to parse local storage for sync:', e);
+          }
+        }
+
+        const merged = await syncLocalWithSupabase(localDays);
+        setWorkDays(merged);
+        setSyncStatus('synced');
+        triggerToast('☁️ Datos sincronizados con Supabase correctamente.');
+      } catch (error) {
+        console.error('Failed to perform initial sync:', error);
+        setSyncStatus('error');
+        triggerToast('⚠️ Error al conectar con Supabase. Usando respaldo local.');
+      }
+    };
+
+    performSync();
+  }, []);
+
+  // Background auto-save effect
+  useEffect(() => {
+    if (syncStatus !== 'synced') return;
+    if (!isSupabaseConfigured) return;
+
+    // Find current active day in state
+    const dayToSync = workDays.find(wd => wd.date === selectedDate && wd.personName === personName) || {
+      date: selectedDate,
+      personName: personName,
+      tasks: []
+    };
+
+    const timer = setTimeout(async () => {
+      try {
+        await upsertWorkDay(dayToSync);
+        console.log(`Auto-saved day ${selectedDate} for ${personName} to Supabase.`);
+      } catch (error) {
+        console.error('Error auto-saving to Supabase:', error);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [workDays, selectedDate, personName, syncStatus]);
+
   // Toast feedback helper
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
@@ -100,9 +182,9 @@ export default function App() {
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  // Find or create WorkDay entry for the currently selected date
+  // Find or create WorkDay entry for the currently selected date and person
   const currentWorkDay = useMemo(() => {
-    let day = workDays.find(wd => wd.date === selectedDate);
+    let day = workDays.find(wd => wd.date === selectedDate && wd.personName === personName);
     if (!day) {
       day = {
         date: selectedDate,
@@ -113,12 +195,21 @@ export default function App() {
     return day;
   }, [workDays, selectedDate, personName]);
 
+  // Daily goals based on the collaborator name (Bruno, Gabriela, and Steffany have 11h, others 8h)
+  const dailyGoalHours = useMemo(() => {
+    return ['Bruno', 'Gabriela', 'Steffany'].includes(personName) ? 11 : 8;
+  }, [personName]);
+
+  const dailyGoalMinutes = useMemo(() => {
+    return dailyGoalHours * 60;
+  }, [dailyGoalHours]);
+
   // Sorted list of tasks for the current selected day (chronologically by start time)
   const sortedTasks = useMemo(() => {
     return [...currentWorkDay.tasks].sort((a, b) => a.startTime.localeCompare(b.startTime));
   }, [currentWorkDay]);
 
-  // Handle adding a new activity/task
+  // Handle adding or updating an activity/task
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!taskTitle.trim()) {
@@ -142,6 +233,37 @@ export default function App() {
       return;
     }
 
+    if (editingTaskId) {
+      // Update existing task
+      setWorkDays(prev => {
+        return prev.map(wd => {
+          if (wd.date === selectedDate && wd.personName === personName) {
+            return {
+              ...wd,
+              tasks: wd.tasks.map(t => t.id === editingTaskId ? {
+                ...t,
+                title: taskTitle.trim(),
+                category: taskCategory,
+                startTime,
+                endTime,
+                notes: taskNotes.trim() || undefined,
+                ...(taskCategory === 'Otro' ? { customCategory: customCategoryName.trim() } : { customCategory: undefined })
+              } : t)
+            };
+          }
+          return wd;
+        });
+      });
+      setEditingTaskId(null);
+      triggerToast('✅ ¡Actividad editada correctamente!');
+
+      // Reset fields
+      setTaskTitle('');
+      setTaskNotes('');
+      setCustomCategoryName('');
+      return;
+    }
+
     const newTask: Task = {
       id: 'task_' + Date.now(),
       title: taskTitle.trim(),
@@ -154,7 +276,7 @@ export default function App() {
 
     // Update workDays state
     setWorkDays(prev => {
-      const existingDayIndex = prev.findIndex(wd => wd.date === selectedDate);
+      const existingDayIndex = prev.findIndex(wd => wd.date === selectedDate && wd.personName === personName);
       
       if (existingDayIndex >= 0) {
         // Update existing day
@@ -193,6 +315,33 @@ export default function App() {
     triggerToast('✅ ¡Actividad agregada correctamente!');
   };
 
+  // Start editing an existing task
+  const handleStartEditTask = (task: Task) => {
+    setEditingTaskId(task.id);
+    setTaskTitle(task.title);
+    setTaskCategory(task.category);
+    setCustomCategoryName(task.customCategory || '');
+    setStartTime(task.startTime);
+    setEndTime(task.endTime);
+    setTaskNotes(task.notes || '');
+    
+    // Scroll form to view smoothly
+    const formElement = document.getElementById('activity-form-container');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingTaskId(null);
+    setTaskTitle('');
+    setTaskNotes('');
+    setCustomCategoryName('');
+    setStartTime('09:00');
+    setEndTime('10:00');
+  };
+
   // Set quick times (e.g. current hour now)
   const setQuickTime = (type: 'start' | 'end') => {
     const now = new Date();
@@ -210,14 +359,14 @@ export default function App() {
   const handleDeleteTask = (taskId: string) => {
     setWorkDays(prev => {
       return prev.map(wd => {
-        if (wd.date === selectedDate) {
+        if (wd.date === selectedDate && wd.personName === personName) {
           return {
             ...wd,
             tasks: wd.tasks.filter(t => t.id !== taskId)
           };
         }
         return wd;
-      }).filter(wd => wd.tasks.length > 0 || wd.date === selectedDate); // Keep empty today to allow logging
+      }).filter(wd => wd.tasks.length > 0 || (wd.date === selectedDate && wd.personName === personName)); // Keep empty today to allow logging
     });
     triggerToast('🗑️ Actividad eliminada.');
   };
@@ -264,7 +413,7 @@ export default function App() {
     }
   };
 
-  // Compute calculated statistics for the last 7 calendar days
+  // Compute calculated statistics for the last 7 calendar days (productive hours, excluding Pausa)
   const last7DaysStats = useMemo(() => {
     const result = [];
     const today = new Date();
@@ -274,11 +423,13 @@ export default function App() {
       d.setDate(today.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
       
-      const dayData = workDays.find(wd => wd.date === dateStr);
+      const dayData = workDays.find(wd => wd.date === dateStr && wd.personName === personName);
       let totalMins = 0;
       
       if (dayData && dayData.tasks.length > 0) {
-        totalMins = dayData.tasks.reduce((sum, t) => sum + calculateDurationMinutes(t.startTime, t.endTime), 0);
+        totalMins = dayData.tasks
+          .filter(t => t.category !== 'Pausa')
+          .reduce((sum, t) => sum + calculateDurationMinutes(t.startTime, t.endTime), 0);
       }
       
       result.push({
@@ -289,9 +440,9 @@ export default function App() {
       });
     }
     return result;
-  }, [workDays]);
+  }, [workDays, personName]);
 
-  // Compute category times across ALL logged data in workDays
+  // Compute category times across ALL logged data in workDays for the selected person
   const categoryStats = useMemo(() => {
     const totals: Record<string, number> = {
       'Inspección de Lote': 0,
@@ -300,31 +451,58 @@ export default function App() {
       'Gestión de No Conformidades': 0,
       'Calibración de Equipos': 0,
       'Elaboración de Reportes': 0,
+      'Reunión': 0,
+      'PIE Calidad': 0,
+      'Gestión': 0,
+      'SAP QM': 0,
       'Pausa': 0,
       'Otro': 0
     };
     
     let grandTotalMins = 0;
+    let productiveMins = 0;
     
-    workDays.forEach(day => {
+    workDays.filter(day => day.personName === personName).forEach(day => {
       day.tasks.forEach(task => {
         const mins = calculateDurationMinutes(task.startTime, task.endTime);
         const catKey = task.category === 'Otro' && task.customCategory ? task.customCategory : task.category;
         totals[catKey] = (totals[catKey] || 0) + mins;
         grandTotalMins += mins;
+        if (task.category !== 'Pausa') {
+          productiveMins += mins;
+        }
       });
     });
 
-    return {
-      totals: Object.entries(totals).map(([cat, mins]) => ({
+    const list = Object.entries(totals).map(([cat, mins]) => {
+      let pct = 0;
+      if (cat !== 'Pausa') {
+        pct = productiveMins > 0 ? Math.round((mins / productiveMins) * 100) : 0;
+      }
+      return {
         category: cat,
         minutes: mins,
         hours: parseFloat((mins / 60).toFixed(1)),
-        percentage: grandTotalMins > 0 ? Math.round((mins / grandTotalMins) * 100) : 0
-      })).sort((a, b) => b.minutes - a.minutes),
-      grandTotalMins
+        percentage: pct,
+        isPause: cat === 'Pausa'
+      };
+    });
+
+    // Sort: normal categories first sorted by minutes, then Pausa at the end
+    const nonPauseList = list.filter(item => !item.isPause).sort((a, b) => b.minutes - a.minutes);
+    const pauseItem = list.find(item => item.isPause);
+    
+    const finalTotals = [...nonPauseList];
+    if (pauseItem && pauseItem.minutes > 0) {
+      finalTotals.push(pauseItem);
+    }
+
+    return {
+      totals: finalTotals,
+      grandTotalMins,
+      productiveMins
     };
-  }, [workDays]);
+  }, [workDays, personName]);
 
   // Overall statistics summaries
   const totalHoursLoggedThisWeek = useMemo(() => {
@@ -336,9 +514,11 @@ export default function App() {
     return last7DaysStats.filter(d => d.minutes > 0).length;
   }, [last7DaysStats]);
 
-  // Calculate day totals for selected day
+  // Calculate day totals for selected day (excluding Pausa from productive time)
   const selectedDayTotalMinutes = useMemo(() => {
-    return sortedTasks.reduce((sum, t) => sum + calculateDurationMinutes(t.startTime, t.endTime), 0);
+    return sortedTasks
+      .filter(t => t.category !== 'Pausa')
+      .reduce((sum, t) => sum + calculateDurationMinutes(t.startTime, t.endTime), 0);
   }, [sortedTasks]);
 
   // Productivity Coach Message
@@ -492,6 +672,30 @@ export default function App() {
               {new Date(selectedDate + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             </p>
           </div>
+
+          {/* Connection Status Badge */}
+          <div className="flex items-center gap-2">
+            {syncStatus === 'syncing' && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-700 text-[10px] md:text-xs font-bold rounded-lg border border-blue-200 animate-pulse">
+                <Database className="w-3.5 h-3.5 text-blue-500 animate-spin" />
+                <span className="hidden sm:inline">Sincronizando con Supabase...</span>
+                <span className="sm:hidden">Sincronizando...</span>
+              </div>
+            )}
+            {syncStatus === 'synced' && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-[10px] md:text-xs font-bold rounded-lg border border-emerald-200" title="Todos tus datos están guardados en la nube de Supabase">
+                <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                <span className="hidden sm:inline">Nube Sincronizada (Supabase)</span>
+                <span className="sm:hidden">Sincronizado</span>
+              </div>
+            )}
+            {(syncStatus === 'error' || syncStatus === 'not-configured') && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 text-slate-600 text-[10px] md:text-xs font-bold rounded-lg border border-slate-200" title="La app funciona localmente en tu teléfono. El historial no se perderá al actualizar.">
+                <CloudOff className="w-3.5 h-3.5 text-slate-400" />
+                <span>Modo Local (Dispositivo)</span>
+              </div>
+            )}
+          </div>
         </header>
 
         {/* Content Body Grid */}
@@ -522,10 +726,22 @@ export default function App() {
             </section>
 
             {/* Registrar Nueva Tarea Card */}
-            <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <h3 className="text-xs font-extrabold text-slate-900 mb-3 flex items-center gap-2">
-                <span className="text-base text-blue-600">⚡</span> Registrar Nueva Tarea
-              </h3>
+            <section id="activity-form-container" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4Scroll">
+              <div className="flex justify-between items-center mb-1">
+                <h3 className="text-xs font-extrabold text-slate-900 flex items-center gap-2">
+                  <span className="text-base text-blue-600">{editingTaskId ? '📝' : '⚡'}</span> 
+                  {editingTaskId ? 'Editar Actividad' : 'Registrar Nueva Tarea'}
+                </h3>
+                {editingTaskId && (
+                  <button 
+                    type="button" 
+                    onClick={handleCancelEdit}
+                    className="text-[10px] text-red-500 hover:underline font-bold"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
               
               <form onSubmit={handleAddTask} className="space-y-4">
                 <div>
@@ -635,10 +851,28 @@ export default function App() {
                   />
                 </div>
 
-                <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all flex items-center justify-center gap-1.5 cursor-pointer">
-                  <Plus className="w-4 h-4" />
-                  <span>Añadir al Registro</span>
-                </button>
+                <div className="flex gap-2">
+                  {editingTaskId && (
+                    <button 
+                      type="button" 
+                      onClick={handleCancelEdit} 
+                      className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl text-xs font-extrabold hover:bg-slate-200 transition-all cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                  <button 
+                    type="submit" 
+                    className={`py-3 text-white rounded-xl text-xs font-extrabold shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      editingTaskId 
+                        ? 'flex-1 bg-amber-600 shadow-amber-100 hover:bg-amber-700' 
+                        : 'w-full bg-blue-600 shadow-blue-100 hover:bg-blue-700'
+                    }`}
+                  >
+                    {editingTaskId ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                    <span>{editingTaskId ? 'Guardar Cambios' : 'Añadir al Registro'}</span>
+                  </button>
+                </div>
               </form>
             </section>
 
@@ -664,11 +898,11 @@ export default function App() {
                 <div className="h-1.5 bg-blue-950/60 rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-blue-400 rounded-full transition-all duration-500" 
-                    style={{ width: `${Math.min((selectedDayTotalMinutes / 480) * 100, 100)}%` }}
+                    style={{ width: `${Math.min((selectedDayTotalMinutes / dailyGoalMinutes) * 100, 100)}%` }}
                   />
                 </div>
                 <p className="text-[10px] opacity-60 font-medium italic text-right">
-                  {Math.round((selectedDayTotalMinutes / 480) * 100)}% de la meta diaria (8 hrs)
+                  {Math.round((selectedDayTotalMinutes / dailyGoalMinutes) * 100)}% de la meta diaria ({dailyGoalHours} hrs)
                 </p>
               </div>
             </section>
@@ -731,14 +965,23 @@ export default function App() {
                                 <span>{task.category === 'Otro' && task.customCategory ? task.customCategory : task.category}</span>
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                onClick={() => handleDeleteTask(task.id)}
-                                className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-all cursor-pointer"
-                                title="Eliminar"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => handleStartEditTask(task)}
+                                  className="p-1 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-all cursor-pointer"
+                                  title="Editar"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTask(task.id)}
+                                  className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-all cursor-pointer"
+                                  title="Eliminar"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -900,6 +1143,7 @@ export default function App() {
                         {categoryStats.totals.map((stat) => {
                           if (stat.minutes === 0) return null;
                           const colors = CATEGORY_COLORS[stat.category as TaskCategory] || CATEGORY_COLORS['Otro'];
+                          const isPause = stat.category === 'Pausa';
                           return (
                             <div key={stat.category} className="space-y-1">
                               <div className="flex justify-between text-[11px] font-bold text-slate-700">
@@ -908,12 +1152,17 @@ export default function App() {
                                   <span>{stat.category}</span>
                                 </span>
                                 <span className="font-mono text-slate-500">
-                                  {stat.hours}h ({stat.percentage}%)
+                                  {stat.hours}h {isPause ? '' : `(${stat.percentage}%)`}
                                 </span>
                               </div>
-                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                                <div className={`h-full ${colors.accent}`} style={{ width: `${stat.percentage}%` }} />
-                              </div>
+                              {!isPause && (
+                                <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                  <div className={`h-full ${colors.accent}`} style={{ width: `${stat.percentage}%` }} />
+                                </div>
+                              )}
+                              {isPause && (
+                                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 border-dashed" />
+                              )}
                             </div>
                           );
                         })}

@@ -50,12 +50,16 @@ export function generateWhatsAppReport(workDay: WorkDay): string {
   const capitalizedDate = formattedDate.charAt(0).toUpperCase() + formattedDate.slice(1);
 
   let totalMinutes = 0;
+  let productiveMinutes = 0;
   let taskLines = '';
   let categorySummary: Record<string, number> = {};
 
   tasks.forEach((task, index) => {
     const duration = calculateDurationMinutes(task.startTime, task.endTime);
     totalMinutes += duration;
+    if (task.category !== 'Pausa') {
+      productiveMinutes += duration;
+    }
     
     // Determine the category display name
     const finalCategory = task.category === 'Otro' && task.customCategory ? task.customCategory : task.category;
@@ -68,7 +72,6 @@ export function generateWhatsAppReport(workDay: WorkDay): string {
     
     taskLines += `• *[${task.startTime} - ${task.endTime}]* (${durationStr})\n`;
     taskLines += `  ${emoji} *${task.title}*\n`;
-    taskLines += `  _Categoría:_ ${finalCategory}\n`;
     if (task.notes && task.notes.trim() !== '') {
       taskLines += `  _Nota:_ ${task.notes.trim()}\n`;
     }
@@ -81,11 +84,21 @@ export function generateWhatsAppReport(workDay: WorkDay): string {
   let summaryBlock = '';
   if (totalMinutes > 0) {
     summaryBlock += `📊 *Resumen de Tiempos por Categoría:*\n`;
+    
+    // Print non-Pausa categories first
     Object.entries(categorySummary).forEach(([cat, mins]) => {
-      const pct = Math.round((mins / totalMinutes) * 100);
+      if (cat === 'Pausa') return;
+      const pct = productiveMinutes > 0 ? Math.round((mins / productiveMinutes) * 100) : 0;
       const catEmoji = CATEGORY_COLORS[cat as TaskCategory]?.emoji || '📝';
       summaryBlock += `${catEmoji} *${cat}:* ${formatMinutes(mins)} (${pct}%)\n`;
     });
+    
+    // Print Pausa at the end of the summary block without percentage
+    if (categorySummary['Pausa']) {
+      const mins = categorySummary['Pausa'];
+      const catEmoji = CATEGORY_COLORS['Pausa']?.emoji || '☕';
+      summaryBlock += `${catEmoji} *Pausa:* ${formatMinutes(mins)}\n`;
+    }
   }
 
   const report = `*🚀 REPORTE DE JORNADA LABORAL (QC) 🚀*

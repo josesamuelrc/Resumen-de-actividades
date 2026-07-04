@@ -10,6 +10,10 @@ export type TaskCategory =
   | 'Gestión de No Conformidades' 
   | 'Calibración de Equipos' 
   | 'Elaboración de Reportes' 
+  | 'Reunión'
+  | 'PIE Calidad'
+  | 'Gestión'
+  | 'SAP QM'
   | 'Pausa' 
   | 'Otro';
 
@@ -71,6 +75,34 @@ export const CATEGORY_COLORS: Record<TaskCategory, { bg: string; text: string; b
     border: 'border-slate-100 dark:border-slate-900/50',
     accent: 'bg-slate-500',
     emoji: '📑'
+  },
+  'Reunión': {
+    bg: 'bg-purple-50 dark:bg-purple-950/40',
+    text: 'text-purple-700 dark:text-purple-300',
+    border: 'border-purple-100 dark:border-purple-900/50',
+    accent: 'bg-purple-500',
+    emoji: '👥'
+  },
+  'PIE Calidad': {
+    bg: 'bg-cyan-50 dark:bg-cyan-950/40',
+    text: 'text-cyan-700 dark:text-cyan-300',
+    border: 'border-cyan-100 dark:border-cyan-900/50',
+    accent: 'bg-cyan-500',
+    emoji: '🛡️'
+  },
+  'Gestión': {
+    bg: 'bg-sky-50 dark:bg-sky-950/40',
+    text: 'text-sky-700 dark:text-sky-300',
+    border: 'border-sky-100 dark:border-sky-900/50',
+    accent: 'bg-sky-500',
+    emoji: '📊'
+  },
+  'SAP QM': {
+    bg: 'bg-orange-50 dark:bg-orange-950/40',
+    text: 'text-orange-700 dark:text-orange-300',
+    border: 'border-orange-100 dark:border-orange-900/50',
+    accent: 'bg-orange-500',
+    emoji: '💻'
   },
   Pausa: {
     bg: 'bg-emerald-50 dark:bg-emerald-950/40',
