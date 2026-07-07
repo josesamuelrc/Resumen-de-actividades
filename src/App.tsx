@@ -230,6 +230,32 @@ export default function App() {
       return;
     }
 
+    if (endVal < startVal) {
+      triggerToast('⚠️ La hora de finalización no puede ser anterior a la de inicio.');
+      return;
+    }
+
+    // Check if there is an overlapping task
+    const overlappingTask = currentWorkDay.tasks.find(t => {
+      // If we are editing, ignore the task itself
+      if (editingTaskId && t.id === editingTaskId) {
+        return false;
+      }
+      
+      const tStartMins = t.startTime.split(':').map(Number);
+      const tEndMins = t.endTime.split(':').map(Number);
+      const tStartVal = tStartMins[0] * 60 + tStartMins[1];
+      const tEndVal = tEndMins[0] * 60 + tEndMins[1];
+      
+      // Overlap condition: StartA < EndB and EndA > StartB
+      return startVal < tEndVal && endVal > tStartVal;
+    });
+
+    if (overlappingTask) {
+      triggerToast(`⚠️ El horario se cruza con otra actividad: "${overlappingTask.title}" (${overlappingTask.startTime} - ${overlappingTask.endTime})`);
+      return;
+    }
+
     if (taskCategory === 'Otro' && !customCategoryName.trim()) {
       triggerToast('⚠️ Por favor escribe el nombre de la categoría personalizada.');
       return;
