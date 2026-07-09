@@ -40,7 +40,8 @@ import {
   generateWhatsAppReport, 
   getSampleData, 
   formatChartDate,
-  generateCSV
+  generateCSV,
+  getMinutesSincePivot
 } from './utils';
 import { 
   isSupabaseConfigured, 
@@ -208,7 +209,9 @@ export default function App() {
 
   // Sorted list of tasks for the current selected day (chronologically by start time)
   const sortedTasks = useMemo(() => {
-    return [...currentWorkDay.tasks].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    return [...currentWorkDay.tasks].sort((a, b) => {
+      return getMinutesSincePivot(a.startTime) - getMinutesSincePivot(b.startTime);
+    });
   }, [currentWorkDay]);
 
   // Handle adding or updating an activity/task
@@ -219,36 +222,42 @@ export default function App() {
       return;
     }
 
-    // Basic time overlap or logical check
-    const startMins = startTime.split(':').map(Number);
-    const endMins = endTime.split(':').map(Number);
-    const startVal = startMins[0] * 60 + startMins[1];
-    const endVal = endMins[0] * 60 + endMins[1];
-
-    if (startVal === endVal) {
+    if (startTime === endTime) {
       triggerToast('⚠️ La hora de inicio y finalización no pueden ser iguales.');
       return;
     }
 
-    if (endVal < startVal) {
-      triggerToast('⚠️ La hora de finalización no puede ser anterior a la de inicio.');
+    // Get continuous timeline representations starting from pivot (06:00 AM)
+    const startPivotVal = getMinutesSincePivot(startTime);
+    let endPivotVal = getMinutesSincePivot(endTime);
+    if (endPivotVal <= startPivotVal) {
+      endPivotVal += 24 * 60; // crossed midnight relative to start or pivot
+    }
+
+    const durationMinutes = endPivotVal - startPivotVal;
+    
+    // Safety check: a single task cannot exceed 14 hours
+    // This prevents accidental input swaps like 08:00 to 07:00 when they meant 17:00
+    if (durationMinutes > 14 * 60) {
+      triggerToast('⚠️ La duración de una sola actividad no puede exceder las 14 horas.');
       return;
     }
 
-    // Check if there is an overlapping task
+    // Check if there is an overlapping task on our continuous timeline
     const overlappingTask = currentWorkDay.tasks.find(t => {
       // If we are editing, ignore the task itself
       if (editingTaskId && t.id === editingTaskId) {
         return false;
       }
       
-      const tStartMins = t.startTime.split(':').map(Number);
-      const tEndMins = t.endTime.split(':').map(Number);
-      const tStartVal = tStartMins[0] * 60 + tStartMins[1];
-      const tEndVal = tEndMins[0] * 60 + tEndMins[1];
+      const tStartPivot = getMinutesSincePivot(t.startTime);
+      let tEndPivot = getMinutesSincePivot(t.endTime);
+      if (tEndPivot <= tStartPivot) {
+        tEndPivot += 24 * 60;
+      }
       
       // Overlap condition: StartA < EndB and EndA > StartB
-      return startVal < tEndVal && endVal > tStartVal;
+      return startPivotVal < tEndPivot && endPivotVal > tStartPivot;
     });
 
     if (overlappingTask) {

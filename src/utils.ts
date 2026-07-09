@@ -212,6 +212,21 @@ export function formatChartDate(dateStr: string): string {
   return `${days[d.getDay()]} ${d.getDate()}`;
 }
 
+// Helper to get minutes elapsed since 06:00 AM (logical day start)
+// This enables seamless chronological sorting and overlap validation for night shifts (6 PM - 6 AM)
+export function getMinutesSincePivot(timeStr: string): number {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  const totalMins = h * 60 + m;
+  const pivotMins = 6 * 60; // 06:00 AM is the pivot
+  
+  if (totalMins >= pivotMins) {
+    return totalMins - pivotMins;
+  } else {
+    return (24 * 60) + totalMins - pivotMins;
+  }
+}
+
 // Generate flat, clean CSV string of all logged tasks for data analysis
 export function generateCSV(workDays: WorkDay[]): string {
   const headers = [
